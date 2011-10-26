@@ -59,6 +59,8 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
         return;
       }
 
+      // No valid revision or only last revision is valid.
+
       $change = reset($changes);
       if ($change->getType() != ArcanistDiffChangeType::TYPE_MESSAGE) {
         throw new Exception('Expected message change.');
@@ -74,16 +76,16 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       $match = null;
       // Get JIRA ID from the commit message if provided.
       preg_match(
-        '/\[jira\] \s*\[([[:alnum:]]+-[[:digit:]]+)\]/',
+        '/\[jira\] \s*\[[[:alnum:]]+-[[:digit:]]+\]/',
         $message->getFieldValue('title'),
         $match
       );
-      // JIRA-ID already in commit message, behave like normal `arc diff`
+      // JIRA ID already in commit message, behave like normal `arc diff`
       if ($match) {
         return;
       }
 
-      // Get JIRA-ID from command line.
+      // Get JIRA ID from command line.
       if ($workflow->getArgument('jira')) {
         $message->setFieldValue('jira', $workflow->getArgument('jira'));
       }
@@ -107,20 +109,20 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       // PHIDs instead of normal user names, getting them from raw commit
       // message instead.
       if (array_key_exists('ccPHIDs', $message->getFields())) {
-        preg_match(
-          "/CC:([\s\n]*\w+((,|[\s\n])|$))*/",
-          $message->getRawCorpus(),
-          $match
-        );
-        $message->setFieldValue('ccPHIDs', substr($match[0], 3));
+        $ccPHIDs = idx($message->getFields(), 'ccPHIDs');
+        $cc = array();
+        foreach ($ccPHIDs as $phid) {
+          $cc[] = $this->userPHIDToName($conduit, $phid);
+        }
+        $message->setFieldValue('ccPHIDs', $cc);
       }
       if (array_key_exists('reviewerPHIDs', $message->getFields())) {
-        preg_match(
-          "/Reviewers:([\s\n]*\w+((,|[\s\n])|$))*/",
-          $message->getRawCorpus(),
-          $match
-        );
-        $message->setFieldValue('reviewerPHIDs', substr($match[0], 10));
+        $reviewerPHIDs = idx($message->getFields(), 'reviewerPHIDs');
+        $reviewer = array();
+        foreach ($reviewerPHIDs as $phid) {
+          $reviewer[] = $this->userPHIDToName($conduit, $phid);
+        }
+        $message->setFieldValue('reviewerPHIDs', $reviewer);
       }
 
       // Adding a dummy test plan if one is not provided.
@@ -128,17 +130,13 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
         $message->setFieldValue('testPlan', 'EMPTY');
       }
 
-      // Add a dummy reviewer if one is not provided.
+      // Add JIRA user to reviewers.
       if (!array_key_exists('reviewerPHIDs', $message->getFields())) {
-        $message->setFieldValue('reviewerPHIDs', ' DUMMY_REVIEWER');
+        $message->setFieldValue('reviewerPHIDs', array());
       }
-
-      // Add JIRA user to CC.
-      $cc = '';
-      if (array_key_exists('ccPHIDs', $message->getFields())) {
-        $cc = $message->getFieldValue('ccPHIDs');
-      }
-      $message->setFieldValue('ccPHIDs', $cc . ' JIRA');
+      $reviewers = idx($message->getFields(), 'reviewerPHIDs');
+      $reviewers[] = 'JIRA';
+      $message->setFieldValue('reviewerPHIDs', $reviewers);
 
       // Pull title and description from JIRA
       $curl = curl_init(
@@ -191,13 +189,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       );
 
       $fields = $message->getFields();
-      $msg = '';
-
-      if (array_key_exists('jira', $fields)) {
-        $msg .= '[jira] ';
-      }
-
-      $msg .= $fields['title'];
+      $msg = '[jira] ' . $fields['title'];
 
       if (array_key_exists('summary', $fields)) {
         $msg .= "\n\nSummary:\n" . $fields['summary'];
@@ -208,11 +200,11 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       }
 
       if (array_key_exists('ccPHIDs', $fields)) {
-        $msg .= "\n\nCC:" . $fields['ccPHIDs'];
+        $msg .= "\n\nCC: " . implode(' ', $fields['ccPHIDs']);
       }
 
       if (array_key_exists('reviewerPHIDs', $fields)) {
-        $msg .= "\n\nReviewers:" . $fields['reviewerPHIDs'];
+        $msg .= "\n\nReviewers: " . implode(' ', $fields['reviewerPHIDs']);
       }
 
       if (array_key_exists('revisionID', $fields)) {
@@ -221,6 +213,16 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
 
       $repository_api->amendGitHeadCommit($msg);
     }
+  }
+
+  private function userPHIDToName($conduit, $phid) {
+    $user = $conduit->callMethodSynchronous(
+      'user.info',
+      array(
+        'phid' => $phid
+      )
+    );
+    return idx($user, 'userName');
   }
 
   public function getCustomArgumentsForCommand($command) {
