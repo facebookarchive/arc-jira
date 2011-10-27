@@ -76,7 +76,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       $match = null;
       // Get JIRA ID from the commit message if provided.
       preg_match(
-        '/\[jira\] \s*\[[[:alnum:]]+-[[:digit:]]+\]/',
+        '/[[:alnum:]]+-[[:digit:]]+\s+\[jira\]/',
         $message->getFieldValue('title'),
         $match
       );
@@ -106,10 +106,9 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       }
 
       // CC and Reviewers are messed up in $message->getFields() - they use
-      // PHIDs instead of normal user names, getting them from raw commit
-      // message instead.
+      // PHIDs instead of normal user names.  They have to be converted back.
       if (array_key_exists('ccPHIDs', $message->getFields())) {
-        $ccPHIDs = idx($message->getFields(), 'ccPHIDs');
+        $ccPHIDs = $message->getFieldValue('ccPHIDs');
         $cc = array();
         foreach ($ccPHIDs as $phid) {
           $cc[] = $this->userPHIDToName($conduit, $phid);
@@ -117,7 +116,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
         $message->setFieldValue('ccPHIDs', $cc);
       }
       if (array_key_exists('reviewerPHIDs', $message->getFields())) {
-        $reviewerPHIDs = idx($message->getFields(), 'reviewerPHIDs');
+        $reviewerPHIDs = $message->getFieldValue('reviewerPHIDs');
         $reviewer = array();
         foreach ($reviewerPHIDs as $phid) {
           $reviewer[] = $this->userPHIDToName($conduit, $phid);
@@ -125,18 +124,18 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
         $message->setFieldValue('reviewerPHIDs', $reviewer);
       }
 
-      // Adding a dummy test plan if one is not provided.
-      if (!$message->getFieldValue('testPlan')) {
-        $message->setFieldValue('testPlan', 'EMPTY');
-      }
-
       // Add JIRA user to reviewers.
       if (!array_key_exists('reviewerPHIDs', $message->getFields())) {
         $message->setFieldValue('reviewerPHIDs', array());
       }
-      $reviewers = idx($message->getFields(), 'reviewerPHIDs');
+      $reviewers = $message->getFieldValue('reviewerPHIDs');
       $reviewers[] = 'JIRA';
       $message->setFieldValue('reviewerPHIDs', $reviewers);
+
+      // Adding a dummy test plan if one is not provided.
+      if (!$message->getFieldValue('testPlan')) {
+        $message->setFieldValue('testPlan', 'EMPTY');
+      }
 
       // Pull title and description from JIRA
       $curl = curl_init(
@@ -162,6 +161,11 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       if (!$title) {
         throw new Exception('Failed to get issue title from JIRA.');
       }
+      $title = preg_replace(
+        '/\[[[:alnum:]]+-[[:digit:]]+\](.*)/',
+        '$1',
+        $title
+      );
       $title = trim(html_entity_decode($title, ENT_QUOTES));
 
       // Different issue types have or don't have descriptions.  Bugs, New
@@ -189,7 +193,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       );
 
       $fields = $message->getFields();
-      $msg = '[jira] ' . $fields['title'];
+      $msg = $fields['jira'] . ' [jira] ' . $fields['title'];
 
       if (array_key_exists('summary', $fields)) {
         $msg .= "\n\nSummary:\n" . $fields['summary'];
