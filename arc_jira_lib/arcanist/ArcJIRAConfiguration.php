@@ -85,23 +85,60 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
         return;
       }
 
+      $jira_id = null;
       // Get JIRA ID from command line.
       if ($workflow->getArgument('jira')) {
-        $message->setFieldValue('jira', $workflow->getArgument('jira'));
+        $jira_id = $workflow->getArgument('jira');
       }
 
       // There is no JIRA ID in either commit message, or command line.
       // Abort execution of custom code.
-      if (!$message->getFieldValue('jira')) {
+      if (!$jira_id) {
         return;
       }
+
+      $match = null;
+      preg_match(
+        '/^[[:alnum:]]+-[[:digit:]]+$/',
+        $jira_id,
+        $match
+      );
+      // User didn't provide full ID with project name and issue number.
+      if (!$match) {
+        $jira_project = $workflow->getWorkingCopy()->getConfig('jira_project');
+        if (!$jira_project) {
+          throw new ArcanistUsageException(
+            'You haven\'t provided full JIRA ID with project name and issue '.
+            'number, and `jira_project` is not set in `.arcconfig`.  Use '.
+            'full JIRA ID like `--jira HIVE-2486` or set `jira_project` and '.
+            'use `--jira 2486`.'
+          );
+        }
+
+        $match = null;
+        preg_match(
+          '/^[[:digit:]]+$/',
+          $jira_id,
+          $match
+        );
+        if (!$match) {
+          throw new ArcanistUsageException(
+            'Provided JIRA ID is in wrong format, either specify full ID '.
+            'with project name and issue number like `--jira HIVE-2486` or '.
+            'provide only the issue number like `--jira 2486`.'
+          );
+        }
+
+        $jira_id = $jira_project . '-' . $jira_id;
+      }
+      $message->setFieldValue('jira', $jira_id);
 
       $jira_api_url = $workflow->getWorkingCopy()->getConfig('jira_api_url');
 
       if (!$jira_api_url) {
-        throw new Exception(
-          'To use --jira switch, you have to set jira_api_url in your '
-          . '.arcconfig file'
+        throw new ArcanistUsageException(
+          'To use `--jira` switch, you have to set `jira_api_url` in your '.
+          '`.arcconfig` file'
         );
       }
 
@@ -151,9 +188,13 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       try {
         // Will fail both when we fail to connect and if we get non XML
         // response.
-        $issue = new SimpleXMLElement($issue);
+        $issue = new SimpleXMLElement($issue, LIBXML_NOERROR);
       } catch (Exception $e) {
-        throw new Exception('Failed to get issue information from JIRA.');
+        throw new Exception(
+          'Failed to get issue information from JIRA.  Check if you can '.
+          'connect to used JIRA instance and check if given JIRA ID doesn\'t'.
+          'contain errors.'
+        );
       }
       $title = $issue->channel->item->title;
       $description = $issue->channel->item->description;
