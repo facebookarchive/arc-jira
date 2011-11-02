@@ -25,155 +25,285 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
   private $jiraInfo;
   private $comment;
 
-  public function willRunWorkflow($command, ArcanistBaseWorkflow $workflow) {
-    if ($workflow instanceof ArcanistDiffWorkflow) {
-      $this->workflow = $workflow;
-      $this->repositoryApi = $workflow->getRepositoryAPI();
-      $this->conduit = $workflow->getConduit();
-      $this->getJiraId();
-      // If JIRA parameter is not set, abort custom code execution.
-      if (!$this->jiraId) {
-        return;
-      }
-      $this->getJiraApiUrl();
-      $this->getJiraInfo();
+  private function willRunDiffWorkflow() {
+    $this->getJiraId();
+    // If JIRA parameter is not set, abort custom code execution.
+    if (!$this->jiraId) {
+      return;
+    }
+    $this->getJiraApiUrl();
+    $this->getJiraInfo();
 
-      // Magic in the pre hook happens only for Git.
-      if (!($this->repositoryApi instanceof ArcanistGitAPI)) {
-        return;
-      }
+    // Magic in the pre hook happens only for Git.
+    if (!($this->repositoryApi instanceof ArcanistGitAPI)) {
+      return;
+    }
 
-      $parser = new ArcanistDiffParser();
+    $parser = new ArcanistDiffParser();
 
-      $this->repositoryApi->parseRelativeLocalCommit(
-        $workflow->getArgument('paths')
-      );
-      $log = $this->repositoryApi->getGitCommitLog();
-      $changes = $parser->parseDiff($log);
+    $this->repositoryApi->parseRelativeLocalCommit(
+      $this->workflow->getArgument('paths')
+    );
+    $log = $this->repositoryApi->getGitCommitLog();
+    $changes = $parser->parseDiff($log);
 
-      // Number of valid (Differential formatted) commits in given range.
-      $valid = 0;
-      // True if last commit message is valid (Differential formatted).
-      $in_last = false;
-      foreach (array_reverse($changes) as $key => $change) {
-        $message = ArcanistDifferentialCommitMessage::newFromRawCorpus(
-          $change->getMetadata('message')
-        );
-        if ($message->getRevisionID()) {
-          $valid += 1;
-          $in_last = true;
-        } else {
-          $in_last = false;
-        }
-      }
-
-      // Broken history, let `arc diff` complain.
-      if ($valid > 1) {
-        return;
-      }
-      // User is stacking commits and `arc diff` was already called before.
-      if ($valid == 1 && !$in_last) {
-        return;
-      }
-
-      // If we got here, there is no valid revision or only last revision
-      // is valid.
-
-      $change = reset($changes);
-      if ($change->getType() != ArcanistDiffChangeType::TYPE_MESSAGE) {
-        throw new Exception('Expected message change.');
-      }
+    // Number of valid (Differential formatted) commits in given range.
+    $valid = 0;
+    // True if last commit message is valid (Differential formatted).
+    $in_last = false;
+    foreach (array_reverse($changes) as $key => $change) {
       $message = ArcanistDifferentialCommitMessage::newFromRawCorpus(
         $change->getMetadata('message')
       );
+      if ($message->getRevisionID()) {
+        $valid += 1;
+        $in_last = true;
+      } else {
+        $in_last = false;
+      }
+    }
 
-      $revision_id = $message->getRevisionID();
+    // Broken history, let `arc diff` complain.
+    if ($valid > 1) {
+      return;
+    }
+    // User is stacking commits and `arc diff` was already called before.
+    if ($valid == 1 && !$in_last) {
+      return;
+    }
 
-      $message->pullDataFromConduit($this->conduit);
+    // If we got here, there is no valid revision or only last revision
+    // is valid.
 
-      $match = null;
-      // Get JIRA ID from the commit message if provided.
-      preg_match(
-        '/[[:alnum:]]+-[[:digit:]]+\s+\[jira\]/',
-        $message->getFieldValue('title'),
-        $match
-      );
-      // JIRA ID already in commit message, behave like normal `arc diff`
-      if ($match) {
+    $change = reset($changes);
+    if ($change->getType() != ArcanistDiffChangeType::TYPE_MESSAGE) {
+      throw new Exception('Expected message change.');
+    }
+    $message = ArcanistDifferentialCommitMessage::newFromRawCorpus(
+      $change->getMetadata('message')
+    );
+
+    $revision_id = $message->getRevisionID();
+
+    $message->pullDataFromConduit($this->conduit);
+
+    $match = null;
+    // Get JIRA ID from the commit message if provided.
+    preg_match(
+      '/[[:alnum:]]+-[[:digit:]]+\s+\[jira\]/',
+      $message->getFieldValue('title'),
+      $match
+    );
+    // JIRA ID already in commit message, behave like normal `arc diff`
+    if ($match) {
+      return;
+    }
+
+    // CC and Reviewers are messed up in $message->getFields() - they use
+    // PHIDs instead of normal user names.  They have to be converted back.
+    if (array_key_exists('ccPHIDs', $message->getFields())) {
+      $ccPHIDs = $message->getFieldValue('ccPHIDs');
+      $cc = array();
+      foreach ($ccPHIDs as $phid) {
+        $cc[] = $this->userPHIDToName($phid);
+      }
+      $message->setFieldValue('ccPHIDs', $cc);
+    }
+    if (array_key_exists('reviewerPHIDs', $message->getFields())) {
+      $reviewerPHIDs = $message->getFieldValue('reviewerPHIDs');
+      $reviewer = array();
+      foreach ($reviewerPHIDs as $phid) {
+        $reviewer[] = $this->userPHIDToName($phid);
+      }
+      $message->setFieldValue('reviewerPHIDs', $reviewer);
+    }
+
+    // Add JIRA user to reviewers.
+    if (!array_key_exists('reviewerPHIDs', $message->getFields())) {
+      $message->setFieldValue('reviewerPHIDs', array());
+    }
+    $reviewers = $message->getFieldValue('reviewerPHIDs');
+    $reviewers[] = 'JIRA';
+    $message->setFieldValue('reviewerPHIDs', $reviewers);
+
+    // Adding a dummy test plan if one is not provided.
+    if (!$message->getFieldValue('testPlan')) {
+      $message->setFieldValue('testPlan', 'EMPTY');
+    }
+
+    $title = $this->jiraInfo['title'];
+    $description = $this->jiraInfo['description'];
+    $commit_title = $message->getFieldValue('title');
+    $commit_summary = $message->getFieldValue('summary');
+
+    // Set new title and summary.
+    $message->setFieldValue('title', $title);
+    $message->setFieldValue(
+      'summary',
+      $commit_title . "\n\n" . $commit_summary . "\n\n" . $description
+    );
+
+    $fields = $message->getFields();
+    $msg = $this->jiraId . ' [jira] ' . $fields['title'];
+
+    if (array_key_exists('summary', $fields)) {
+      $msg .= "\n\nSummary:\n" . $fields['summary'];
+    }
+
+    if (array_key_exists('testPlan', $fields)) {
+      $msg .= "\n\nTest Plan:\n" . $fields['testPlan'];
+    }
+
+    if (array_key_exists('ccPHIDs', $fields)) {
+      $msg .= "\n\nCC: " . implode(' ', $fields['ccPHIDs']);
+    }
+
+    if (array_key_exists('reviewerPHIDs', $fields)) {
+      $msg .= "\n\nReviewers: " . implode(' ', $fields['reviewerPHIDs']);
+    }
+
+    if (array_key_exists('revisionID', $fields)) {
+      $msg .= "\n\nDifferential Revision: " . $fields['revisionID'];
+    }
+
+    $this->repositoryApi->amendGitHeadCommit($msg);
+  }
+
+  private function didRunDiffWorkflow() {
+    // Magic in the post hook happens only for SVN.
+    if (!($this->repositoryApi instanceof ArcanistSubversionAPI)) {
+      return;
+    }
+
+    $diff_id = $this->workflow->getDiffID();
+
+    $commitable_revisions = $this->conduit->callMethodSynchronous(
+      'differential.find',
+      array(
+        'query' => 'commitable',
+        'guids' => array($this->workflow->getUserPHID())
+      )
+    );
+    $open_revisions = $this->conduit->callMethodSynchronous(
+      'differential.find',
+      array(
+        'query' => 'open',
+        'guids' => array($this->workflow->getUserPHID())
+      )
+    );
+    $revisions_data = array_merge($open_revisions, $commitable_revisions);
+    $revisions = array();
+    foreach ($revisions_data as $revision) {
+      $ref = ArcanistDifferentialRevisionRef::newFromDictionary($revision);
+      $revisions[$ref->getId()] = $ref;
+    }
+
+    $revision = null;
+
+    if (count($revisions) == 0) {
+      // $revision stays null.
+      if (!$this->jiraId) {
+        // Just create the diff.
         return;
       }
+    } else {
+      // Choose revision from available ones.
+      $choices = array();
+      echo "\n\n";
+      $ii = 1;
+      foreach ($revisions as $ref) {
+        $choices[$ii] = $ref;
+        echo ' ['.$ii++.'] D'.$ref->getID().' '.$ref->getName()."\n";
+      }
+      if ($this->jiraId !== null) {
+        $choices[$ii] = null;
+        echo ' ['.$ii++."] Create a new revision\n";
+      }
+      echo ' ['.$ii."] Don't attach this diff to any revision\n";
 
-      // CC and Reviewers are messed up in $message->getFields() - they use
-      // PHIDs instead of normal user names.  They have to be converted back.
-      if (array_key_exists('ccPHIDs', $message->getFields())) {
-        $ccPHIDs = $message->getFieldValue('ccPHIDs');
-        $cc = array();
-        foreach ($ccPHIDs as $phid) {
-          $cc[] = $this->userPHIDToName($phid);
+      $valid_choice = false;
+      while (!$valid_choice) {
+        $id = phutil_console_prompt('Which revision do you want to update?');
+        $id = trim(strtoupper($id));
+        if (strpos($id, 'D') === 0) {
+          $id = trim($id, 'D');
+          if (isset($revisions[$id])) {
+            $valid_choice = true;
+            $revision = $revisions[$id];
+          }
+        } else {
+          $id = intval($id);
+          if ($id > 0 && $id < $ii) {
+            $valid_choice = true;
+            $revision = $choices[$id];
+          }
+          if ($id == $ii) {
+            // Just create the diff.
+            return;
+          }
         }
-        $message->setFieldValue('ccPHIDs', $cc);
       }
-      if (array_key_exists('reviewerPHIDs', $message->getFields())) {
-        $reviewerPHIDs = $message->getFieldValue('reviewerPHIDs');
-        $reviewer = array();
-        foreach ($reviewerPHIDs as $phid) {
-          $reviewer[] = $this->userPHIDToName($phid);
-        }
-        $message->setFieldValue('reviewerPHIDs', $reviewer);
-      }
+    }
 
-      // Add JIRA user to reviewers.
-      if (!array_key_exists('reviewerPHIDs', $message->getFields())) {
-        $message->setFieldValue('reviewerPHIDs', array());
-      }
-      $reviewers = $message->getFieldValue('reviewerPHIDs');
-      $reviewers[] = 'JIRA';
-      $message->setFieldValue('reviewerPHIDs', $reviewers);
+    $this->getComment();
 
-      // Adding a dummy test plan if one is not provided.
-      if (!$message->getFieldValue('testPlan')) {
-        $message->setFieldValue('testPlan', 'EMPTY');
-      }
-
+    if ($revision === null) {
+      // Create a new revision.
       $title = $this->jiraInfo['title'];
       $description = $this->jiraInfo['description'];
-      $commit_title = $message->getFieldValue('title');
-      $commit_summary = $message->getFieldValue('summary');
 
-      // Set new title and summary.
-      $message->setFieldValue('title', $title);
-      $message->setFieldValue(
-        'summary',
-        $commit_title . "\n\n" . $commit_summary . "\n\n" . $description
+      $summary = $this->comment . "\n\n" . $description;
+
+      $jira_phid = $this->conduit->callMethodSynchronous(
+        'user.find',
+        array(
+          'aliases' => array('JIRA')
+        )
+      );
+      $jira_phid = $jira_phid['JIRA'];
+
+      $revision = array(
+        'diffid' => $diff_id,
+        'fields' => array(
+          'title' => $this->jiraId . ' [jira] ' . $title,
+          'summary' => $summary,
+          'reviewerPHIDs' => array($jira_phid),
+          'testPlan' => 'EMPTY'
+        )
       );
 
-      $fields = $message->getFields();
-      $msg = $this->jiraId . ' [jira] ' . $fields['title'];
+      $result = $this->conduit->callMethodSynchronous(
+        'differential.createrevision',
+        $revision
+      );
 
-      if (array_key_exists('summary', $fields)) {
-        $msg .= "\n\nSummary:\n" . $fields['summary'];
-      }
+      echo "\n\nCreated new revision D".$result['revisionid']."\n";
+      echo $result['uri']."\n";
+    } else {
+      // Update existing revision.
+      $result = $this->conduit->callMethodSynchronous(
+        'differential.updaterevision',
+        array(
+          'id' => $revision->getId(),
+          'diffid' => $diff_id,
+          'fields' => array(),
+          'message' => $this->comment
+        )
+      );
 
-      if (array_key_exists('testPlan', $fields)) {
-        $msg .= "\n\nTest Plan:\n" . $fields['testPlan'];
-      }
-
-      if (array_key_exists('ccPHIDs', $fields)) {
-        $msg .= "\n\nCC: " . implode(' ', $fields['ccPHIDs']);
-      }
-
-      if (array_key_exists('reviewerPHIDs', $fields)) {
-        $msg .= "\n\nReviewers: " . implode(' ', $fields['reviewerPHIDs']);
-      }
-
-      if (array_key_exists('revisionID', $fields)) {
-        $msg .= "\n\nDifferential Revision: " . $fields['revisionID'];
-      }
-
-      $this->repositoryApi->amendGitHeadCommit($msg);
+      echo "\n\nUpdated revision D".$result['revisionid']."\n";
+      echo $result['uri']."\n";
     }
   }
 
+  public function willRunWorkflow($command, ArcanistBaseWorkflow $workflow) {
+    $this->workflow = $workflow;
+    $this->repositoryApi = $workflow->getRepositoryAPI();
+    $this->conduit = $workflow->getConduit();
+    if ($workflow instanceof ArcanistDiffWorkflow) {
+      $this->willRunDiffWorkflow();
+    }
+  }
 
   public function didRunWorkflow(
       $command,
@@ -181,130 +311,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       $err
     ) {
     if ($workflow instanceof ArcanistDiffWorkflow) {
-      // Magic in the post hook happens only for SVN.
-      if (!($this->repositoryApi instanceof ArcanistSubversionAPI)) {
-        return;
-      }
-
-      $diff_id = $workflow->getDiffID();
-
-      $commitable_revisions = $this->conduit->callMethodSynchronous(
-        'differential.find',
-        array(
-          'query' => 'commitable',
-          'guids' => array($workflow->getUserPHID())
-        )
-      );
-      $open_revisions = $this->conduit->callMethodSynchronous(
-        'differential.find',
-        array(
-          'query' => 'open',
-          'guids' => array($workflow->getUserPHID())
-        )
-      );
-      $revisions_data = array_merge($open_revisions, $commitable_revisions);
-      $revisions = array();
-      foreach ($revisions_data as $revision) {
-        $ref = ArcanistDifferentialRevisionRef::newFromDictionary($revision);
-        $revisions[$ref->getId()] = $ref;
-      }
-
-      $revision = null;
-
-      if (count($revisions) == 0) {
-        // $revision stays null.
-        if (!$this->jiraId) {
-          // Just create the diff.
-          return;
-        }
-      } else {
-        // Choose revision from available ones.
-        $choices = array();
-        echo "\n\n";
-        $ii = 1;
-        foreach ($revisions as $ref) {
-          $choices[$ii] = $ref;
-          echo ' ['.$ii++.'] D'.$ref->getID().' '.$ref->getName()."\n";
-        }
-        if ($this->jiraId !== null) {
-          $choices[$ii] = null;
-          echo ' ['.$ii++."] Create a new revision\n";
-        }
-        echo ' ['.$ii."] Don't attach this diff to any revision\n";
-
-        $valid_choice = false;
-        while (!$valid_choice) {
-          $id = phutil_console_prompt('Which revision do you want to update?');
-          $id = trim(strtoupper($id));
-          if (strpos($id, 'D') === 0) {
-            $id = trim($id, 'D');
-            if (isset($revisions[$id])) {
-              $valid_choice = true;
-              $revision = $revisions[$id];
-            }
-          } else {
-            $id = intval($id);
-            if ($id > 0 && $id < $ii) {
-              $valid_choice = true;
-              $revision = $choices[$id];
-            }
-            if ($id == $ii) {
-              // Just create the diff.
-              return;
-            }
-          }
-        }
-      }
-
-      $this->getComment();
-
-      if ($revision === null) {
-        // Create a new revision.
-        $title = $this->jiraInfo['title'];
-        $description = $this->jiraInfo['description'];
-
-        $summary = $this->comment . "\n\n" . $description;
-
-        $jira_phid = $this->conduit->callMethodSynchronous(
-          'user.find',
-          array(
-            'aliases' => array('JIRA')
-          )
-        );
-        $jira_phid = $jira_phid['JIRA'];
-
-        $revision = array(
-          'diffid' => $diff_id,
-          'fields' => array(
-            'title' => $this->jiraId . ' [jira] ' . $title,
-            'summary' => $summary,
-            'reviewerPHIDs' => array($jira_phid),
-            'testPlan' => 'EMPTY'
-          )
-        );
-
-        $result = $this->conduit->callMethodSynchronous(
-          'differential.createrevision',
-          $revision
-        );
-
-        echo "\n\nCreated new revision D".$result['revisionid']."\n";
-        echo $result['uri']."\n";
-      } else {
-        // Update existing revision.
-        $result = $this->conduit->callMethodSynchronous(
-          'differential.updaterevision',
-          array(
-            'id' => $revision->getId(),
-            'diffid' => $diff_id,
-            'fields' => array(),
-            'message' => $this->comment
-          )
-        );
-
-        echo "\n\nUpdated revision D".$result['revisionid']."\n";
-        echo $result['uri']."\n";
-      }
+      $this->didRunDiffWorkflow();
     }
   }
 
