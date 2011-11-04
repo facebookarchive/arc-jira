@@ -296,6 +296,49 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
     }
   }
 
+  private function didRunCommitWorkflow() {
+    // Commit is only for SVN => we are using SVN.
+
+    $jira_base_url = $this->workflow->getWorkingCopy()
+      ->getConfig('jira_base_url');
+    if (!$jira_base_url) {
+      // Without JIRA URL we can't do anything.
+      return;
+    }
+
+    $revision_id = $this->workflow->getRevisionID();
+    $revision = $this->conduit->callMethodSynchronous(
+      'differential.getrevision',
+      array(
+        'revision_id' => $revision_id,
+      )
+    );
+    $match = null;
+    // Get JIRA ID from the title.
+    preg_match(
+      '/([[:alnum:]]+-[[:digit:]]+)\s+\[jira\]/',
+      $revision['title'],
+      $match
+    );
+    // No JIRA ID in the title, abandon custom workflow.
+    if (!$match) {
+      return;
+    }
+    $this->jiraId = $match[1];
+    try {
+      $this->getJiraApiUrl();
+      $this->getJiraInfo();
+      echo "\n\nCongratulations!  ".
+        "Now you can go to this URL and resolve the issue:\n";
+      echo $jira_base_url.'CommentAssignIssue!default.jspa?action=5&id='.
+        $this->jiraInfo['key']."\n";
+    } catch (Exception $ex) {
+      echo "\n\nCommit was successful, but unable to access JIRA for ".
+        "status update.  Remember to mark the issue resolved after you've ".
+        "reviewed it.\n";
+    }
+  }
+
   public function willRunWorkflow($command, ArcanistBaseWorkflow $workflow) {
     $this->workflow = $workflow;
     $this->repositoryApi = $workflow->getRepositoryAPI();
@@ -312,6 +355,8 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
     ) {
     if ($workflow instanceof ArcanistDiffWorkflow) {
       $this->didRunDiffWorkflow();
+    } else if ($workflow instanceof ArcanistCommitWorkflow) {
+      $this->didRunCommitWorkflow();
     }
   }
 
@@ -386,7 +431,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       . $this->jiraId
       . '/'
       . $this->jiraId
-      . '.xml?field=title&field=description'
+      . '.xml?field=title&field=description&field=key'
     );
     curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
     $issue = curl_exec($curl);
@@ -401,8 +446,9 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
         'contain errors.'
       );
     }
-    $title = $issue->channel->item->title;
-    $description = $issue->channel->item->description;
+    $title = (string) $issue->channel->item->title;
+    $description = (string) $issue->channel->item->description;
+    $key = (string) $issue->channel->item->key->attributes()->id;
 
     if (!$title) {
       throw new Exception('Failed to get issue title from JIRA.');
@@ -431,6 +477,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
     $this->jiraInfo = array(
       'title' => $title,
       'description' => $description,
+      'key' => $key,
     );
   }
 
