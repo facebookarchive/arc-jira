@@ -341,8 +341,12 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
 
   public function willRunWorkflow($command, ArcanistBaseWorkflow $workflow) {
     $this->workflow = $workflow;
-    $this->repositoryApi = $workflow->getRepositoryAPI();
-    $this->conduit = $workflow->getConduit();
+    if ($workflow->requiresRepositoryAPI()) {
+      $this->repositoryApi = $workflow->getRepositoryAPI();
+    }
+    if ($workflow->requiresAuthentication() || $workflow->requiresConduit()) {
+      $this->conduit = $workflow->getConduit();
+    }
     if ($workflow instanceof ArcanistDiffWorkflow) {
       $this->willRunDiffWorkflow();
     }
