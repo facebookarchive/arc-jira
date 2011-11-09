@@ -9,6 +9,7 @@ phutil_register_library_map(array(
   'class' =>
   array(
     'ArcJIRAConfiguration' => 'arcanist',
+    'JavaLintEngine' => 'lint/engine',
   ),
   'function' =>
   array(
@@ -16,6 +17,7 @@ phutil_register_library_map(array(
   'requires_class' =>
   array(
     'ArcJIRAConfiguration' => 'ArcanistConfiguration',
+    'JavaLintEngine' => 'ArcanistLintEngine',
   ),
   'requires_interface' =>
   array(
