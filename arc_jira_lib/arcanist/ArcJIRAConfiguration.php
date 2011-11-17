@@ -299,6 +299,11 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
   private function didRunCommitWorkflow() {
     // Commit is only for SVN => we are using SVN.
 
+    // User didn't actually commit anything, abandon custom workflow.
+    if ($this->workflow->getArgument('show')) {
+        return;
+    }
+
     $jira_base_url = $this->workflow->getWorkingCopy()
       ->getConfig('jira_base_url');
     if (!$jira_base_url) {
