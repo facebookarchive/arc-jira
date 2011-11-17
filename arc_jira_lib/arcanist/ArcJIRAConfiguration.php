@@ -452,8 +452,12 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
     }
     $title = (string) $issue->channel->item->title;
     $description = (string) $issue->channel->item->description;
-    $key = (string) $issue->channel->item->key->attributes()->id;
+    $key = idx(idx((array) $issue->channel->item->key, '@attributes'), 'id');
+    $key = (string) $key;
 
+    if (!$key) {
+        throw new Exception('Failed to get issue key from JIRA.');
+    }
     if (!$title) {
       throw new Exception('Failed to get issue title from JIRA.');
     }
