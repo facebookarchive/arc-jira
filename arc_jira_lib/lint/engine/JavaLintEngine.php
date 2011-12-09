@@ -32,8 +32,10 @@ class JavaLintEngine extends ArcanistLintEngine {
     $paths = $this->getPaths();
 
     foreach ($paths as $path) {
-      if (preg_match('/\.java$/', $path)) {
-        $text_linter->addPath($path);
+      if (Filesystem::pathExists($this->getFilePathOnDisk($path))) {
+        if (preg_match('/\.java$/', $path)) {
+          $text_linter->addPath($path);
+        }
       }
     }
 
