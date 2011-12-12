@@ -479,12 +479,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       $description = '';
     }
     // Remove HTML markup.
-    $description = str_replace("\n", ' ', $description);
-    $description = str_replace('<br/>', "\n", $description);
-    $description = str_replace('<p>', "\n\n", $description);
-    $description = str_replace('</p>', ' ', $description);
-    $description = preg_replace('/<a[^>]*>([^<]*)<\/a>/', '$1', $description);
-    $description = preg_replace("/\n */", "\n", $description);
+    $description = strip_tags($description);
     $description = trim(html_entity_decode($description, ENT_QUOTES));
 
     $this->jiraInfo = array(
