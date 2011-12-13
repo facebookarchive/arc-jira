@@ -333,10 +333,21 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
     try {
       $this->getJiraApiUrl();
       $this->getJiraInfo();
+
+      // 5 means resolved.
+      if ($this->jiraInfo['status'] == 5) {
+        return; // Issue was already resolved.
+      }
+      $action = 5;
+      // 10002 means patch available.
+      if ($this->jiraInfo['status'] == '10002') {
+        $action = 741;
+      }
+
       echo "\n\nCongratulations!  ".
         "Now you can go to this URL and resolve the issue:\n";
-      echo $jira_base_url.'CommentAssignIssue!default.jspa?action=5&id='.
-        $this->jiraInfo['key']."\n";
+      echo $jira_base_url.'CommentAssignIssue!default.jspa?action='.
+        $action.'&id='.$this->jiraInfo['key']."\n";
     } catch (Exception $ex) {
       echo "\n\nCommit was successful, but unable to access JIRA for ".
         "status update.  Remember to mark the issue resolved after you've ".
@@ -440,7 +451,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       . $this->jiraId
       . '/'
       . $this->jiraId
-      . '.xml?field=title&field=description&field=key'
+      . '.xml?field=title&field=description&field=key&field=status'
     );
     curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
     $issue = curl_exec($curl);
@@ -459,9 +470,21 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
     $description = (string) $issue->channel->item->description;
     $key = idx(idx((array) $issue->channel->item->key, '@attributes'), 'id');
     $key = (string) $key;
+    $status = idx(
+      idx((array) $issue->channel->item->status, '@attributes'),
+      'id'
+    );
+    $status = (string) $status;
+    // 1 -> open
+    // 4 -> reopened
+    // 5 -> resolved
+    // 10002 -> patch available
 
     if (!$key) {
-        throw new Exception('Failed to get issue key from JIRA.');
+      throw new Exception('Failed to get issue key from JIRA.');
+    }
+    if (!$status) {
+      throw new Exception('Failed to get issue status from JIRA.');
     }
     if (!$title) {
       throw new Exception('Failed to get issue title from JIRA.');
@@ -486,6 +509,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       'title' => $title,
       'description' => $description,
       'key' => $key,
+      'status' => $status,
     );
   }
 
