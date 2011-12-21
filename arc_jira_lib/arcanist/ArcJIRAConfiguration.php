@@ -252,7 +252,8 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       $title = $this->jiraInfo['title'];
       $description = $this->jiraInfo['description'];
 
-      $summary = $this->comment . "\n\n" . $description;
+      $summary = $this->jiraInfo['link'] . "\n\n"
+          . $this->comment . "\n\n" . $description;
 
       $jira_phid = $this->conduit->callMethodSynchronous(
         'user.find',
@@ -451,7 +452,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       . $this->jiraId
       . '/'
       . $this->jiraId
-      . '.xml?field=title&field=description&field=key&field=status'
+      . '.xml?field=title&field=description&field=key&field=status&field=link'
     );
     curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
     $issue = curl_exec($curl);
@@ -479,6 +480,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
     // 4 -> reopened
     // 5 -> resolved
     // 10002 -> patch available
+    $link = (string) $issue->channel->item->link;
 
     if (!$key) {
       throw new Exception('Failed to get issue key from JIRA.');
@@ -510,6 +512,7 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
       'description' => $description,
       'key' => $key,
       'status' => $status,
+      'link' => $link,
     );
   }
 
