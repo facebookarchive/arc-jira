@@ -1,7 +1,7 @@
 <?php
 
 /*
- * Copyright 2011 Facebook
+ * Copyright 2012 Facebook
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,6 +39,28 @@ class JavaLintEngine extends ArcanistLintEngine {
       }
     }
 
+    // Make all lint messages warnings so we only show them for modified
+    // lines.
+    $text_linter->setCustomSeverityMap(
+      array(
+        ArcanistTextLinter::LINT_DOS_NEWLINE
+          => ArcanistLintSeverity::SEVERITY_WARNING,
+        ArcanistTextLinter::LINT_TAB_LITERAL
+          => ArcanistLintSeverity::SEVERITY_WARNING,
+        ArcanistTextLinter::LINT_LINE_WRAP
+          => ArcanistLintSeverity::SEVERITY_WARNING,
+        ArcanistTextLinter::LINT_EOF_NEWLINE
+          => ArcanistLintSeverity::SEVERITY_WARNING,
+        ArcanistTextLinter::LINT_BAD_CHARSET
+          => ArcanistLintSeverity::SEVERITY_WARNING,
+        ArcanistTextLinter::LINT_TRAILING_WHITESPACE
+          => ArcanistLintSeverity::SEVERITY_WARNING,
+        ArcanistTextLinter::LINT_NO_COMMIT
+          => ArcanistLintSeverity::SEVERITY_WARNING,
+        ));
+
     return $linters;
   }
+
 }
+
