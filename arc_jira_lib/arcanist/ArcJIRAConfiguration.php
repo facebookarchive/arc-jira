@@ -79,9 +79,13 @@ class ArcJIRAConfiguration extends ArcanistConfiguration {
     if ($change->getType() != ArcanistDiffChangeType::TYPE_MESSAGE) {
       throw new Exception('Expected message change.');
     }
-    $message = ArcanistDifferentialCommitMessage::newFromRawCorpus(
-      $change->getMetadata('message')
-    );
+
+    $msg_body = $change->getMetadata('message');
+    if (strpos($msg_body, 'Test Plan:') === false) {
+       $msg_body .= "\n\nTest Plan: EMPTY\n";
+    }
+
+    $message = ArcanistDifferentialCommitMessage::newFromRawCorpus($msg_body);
 
     $revision_id = $message->getRevisionID();
 
