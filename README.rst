@@ -2,6 +2,8 @@
  About Arc-JIRA
 ================
 
+**Note that this project is is deprecated. It is neither supported nor any longer the best way to integrate Phabricator with JIRA**
+
 This package provides Arcanist extension that allows integration between
 Differential code review tool and JIRA issue tracker.
 
